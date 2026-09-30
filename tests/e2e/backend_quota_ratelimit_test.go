@@ -93,6 +93,49 @@ func Test_Examples_BackendQuotaRateLimit(t *testing.T) {
 		makeRequest("quota-test-model", 5, http.StatusTooManyRequests)
 		requireQuotaUsage(t, "quota-test-model", 22)
 	})
+
+	// The AI Gateway controller stamps a hash of the applicable QuotaPolicies onto the generated HTTPRoute
+	// (the "aigateway.envoyproxy.io/quota-policy-hash" annotation). A QuotaPolicy change must re-stamp a
+	// different hash, which is what forces Envoy Gateway to re-translate and re-run the extension
+	// server's PostTranslateModify hook. The generated HTTPRoute shares the AIGatewayRoute's
+	// name/namespace ("quota-test-model"/"default").
+	t.Run("quota policy update is applied live", func(t *testing.T) {
+		const routeName, routeNamespace = "quota-test-model", "default"
+
+		// The annotation must be present initially because a QuotaPolicy targets this route's backend.
+		var initialHash string
+		require.Eventually(t, func() bool {
+			initialHash = getHTTPRouteQuotaHash(t, routeNamespace, routeName)
+			return initialHash != ""
+		}, 30*time.Second, 500*time.Millisecond, "expected quota-policy-hash annotation to be set")
+
+		// Update the QuotaPolicy limit live (no controller/Envoy restart).
+		require.NoError(t, e2elib.Kubectl(t.Context(), "patch", "quotapolicy",
+			"envoy-ai-gateway-quota-ratelimit-policy", "-n", routeNamespace,
+			"--type=merge",
+			"-p", `{"spec":{"perModelQuotas":[{"modelName":"quota-test-model","quota":{"mode":"Shared","defaultBucket":{"limit":5,"duration":"1h"}}}]}}`,
+		).Run())
+
+		// The controller must re-stamp a different hash, proving the HTTPRoute was actually updated
+		// (and thus Envoy Gateway re-translated) in response to the QuotaPolicy change.
+		require.Eventually(t, func() bool {
+			return getHTTPRouteQuotaHash(t, routeNamespace, routeName) != initialHash
+		}, 30*time.Second, 500*time.Millisecond,
+			"quota-policy-hash annotation did not change after updating the QuotaPolicy")
+	})
+}
+
+// getHTTPRouteQuotaHash returns the value of the "aigateway.envoyproxy.io/quota-policy-hash"
+// annotation stamped by the AI Gateway controller on the generated HTTPRoute. It returns "" when the
+// annotation is absent.
+func getHTTPRouteQuotaHash(t *testing.T, namespace, name string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "kubectl", "get", "httproute", name,
+		"-n", namespace,
+		"-o", `jsonpath={.metadata.annotations.aigateway\.envoyproxy\.io/quota-policy-hash}`)
+	out, err := cmd.Output()
+	require.NoError(t, err, "failed to get httproute %s/%s", namespace, name)
+	return strings.TrimSpace(string(out))
 }
 
 // redisExec runs a redis-cli command on the Redis pod and returns the output.
