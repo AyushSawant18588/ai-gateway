@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	stdjson "encoding/json" //nolint: depguard // byte-stable hashing; sonic does not guarantee stable field order.
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -229,10 +230,12 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 		return fmt.Errorf("failed to get HTTPRoute: %w", err)
 	}
 
-	// Update the HTTPRoute with the new AIGatewayRoute.
-	if err = c.newHTTPRoute(ctx, &httpRoute, aiGatewayRoute); err != nil {
-		return fmt.Errorf("failed to construct a new HTTPRoute: %w", err)
-	}
+	// Update the HTTPRoute with the new AIGatewayRoute. A backendRef that fails validation (e.g. a
+	// missing or revoked ReferenceGrant) is dropped from the generated rule rather than aborting the
+	// whole sync, so the HTTPRoute and the Gateways below still get updated to reflect the now-reduced
+	// set of authorized backends instead of staying frozen at their last-good state. The error, if any,
+	// is still returned at the end so the caller marks the AIGatewayRoute NotAccepted as before.
+	newHTTPRouteErr := c.newHTTPRoute(ctx, &httpRoute, aiGatewayRoute)
 
 	if existingRoute {
 		c.logger.Info("updating HTTPRoute", "namespace", httpRoute.Namespace, "name", httpRoute.Name)
@@ -246,14 +249,22 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 		}
 	}
 
-	err = c.syncGateways(ctx, aiGatewayRoute)
-	if err != nil {
+	if err = c.syncGateways(ctx, aiGatewayRoute); err != nil {
 		return fmt.Errorf("failed to sync gw pods: %w", err)
+	}
+
+	if newHTTPRouteErr != nil {
+		return fmt.Errorf("failed to construct a new HTTPRoute: %w", newHTTPRouteErr)
 	}
 	return nil
 }
 
 // newHTTPRoute updates the HTTPRoute with the new AIGatewayRoute.
+//
+// A backendRef that fails validation (e.g. a missing or revoked ReferenceGrant for a cross-namespace
+// reference) is skipped rather than aborting the whole HTTPRoute construction: dst is still populated
+// with every other authorized backendRef, and the validation errors are joined and returned so the
+// caller can still surface them (e.g. to mark the AIGatewayRoute NotAccepted) without leaving dst stale.
 func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv1.HTTPRoute, aiGatewayRoute *aigv1b1.AIGatewayRoute) error {
 	rewriteFilters := []gwapiv1.HTTPRouteFilter{{
 		Type: gwapiv1.HTTPRouteFilterExtensionRef,
@@ -264,6 +275,7 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 		},
 	}}
 	rules := make([]gwapiv1.HTTPRouteRule, 0, len(aiGatewayRoute.Spec.Rules)+1) // +1 for the default rule.
+	var errs []error
 	for i := range aiGatewayRoute.Spec.Rules {
 		rule := &aiGatewayRoute.Spec.Rules[i]
 		var backendRefs []gwapiv1.HTTPBackendRef
@@ -282,7 +294,10 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 						backendNamespace,
 						br.Name,
 					); err != nil {
-						return err
+						c.logger.Error(err, "skipping InferencePool backendRef that failed ReferenceGrant validation",
+							"namespace", aiGatewayRoute.Namespace, "name", aiGatewayRoute.Name, "backend", dstName)
+						errs = append(errs, err)
+						continue
 					}
 				}
 				ns := gwapiv1.Namespace(backendNamespace)
@@ -301,7 +316,10 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 				// Handle AIServiceBackend reference with cross-namespace validation.
 				backend, err := c.validateAndGetBackend(ctx, aiGatewayRoute, br)
 				if err != nil {
-					return fmt.Errorf("failed to get AIServiceBackend %s: %w", dstName, err)
+					c.logger.Error(err, "skipping AIServiceBackend backendRef that failed validation",
+						"namespace", aiGatewayRoute.Namespace, "name", aiGatewayRoute.Name, "backend", dstName)
+					errs = append(errs, fmt.Errorf("failed to get AIServiceBackend %s: %w", dstName, err))
+					continue
 				}
 
 				// Copy the BackendObjectReference from the AIServiceBackend.
@@ -394,7 +412,7 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 	dst.Spec.ParentRefs = aiGatewayRoute.Spec.ParentRefs
 
 	dst.Spec.Hostnames = aiGatewayRoute.Spec.Hostnames
-	return nil
+	return errors.Join(errs...)
 }
 
 // syncGateways synchronizes the gateways referenced by the AIGatewayRoute by sending events to the gateway controller.
