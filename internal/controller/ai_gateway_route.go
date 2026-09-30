@@ -514,6 +514,14 @@ func (c *AIGatewayRouteController) computeQuotaPolicyHash(ctx context.Context, a
 			}
 			for k := range policies.Items {
 				p := &policies.Items[k]
+				// Skip QuotaPolicies that are being deleted. During a deletion the finalizer callback
+				// notifies routes while the terminating policy may still be listable from the cache; if we
+				// counted it, the recomputed hash would be unchanged, the HTTPRoute update would be a no-op,
+				// and Envoy Gateway would not re-translate. Treating a terminating policy as already-absent
+				// makes the hash change deterministically, regardless of whether the cache has dropped it yet.
+				if !p.DeletionTimestamp.IsZero() {
+					continue
+				}
 				seen[p.Namespace+"/"+p.Name] = p
 			}
 		}

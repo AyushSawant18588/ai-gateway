@@ -1224,6 +1224,32 @@ func Test_computeQuotaPolicyHash(t *testing.T) {
 		require.NotEqual(t, before, after, "a structural change must change the hash")
 	})
 
+	t.Run("terminating policy is ignored", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		c := newController(fakeClient)
+		qp := newQuotaPolicy("qp", ns, 100, "apple")
+		// A finalizer makes the fake client keep the object (terminating) after Delete instead of
+		// removing it, mimicking the window during deletion when the policy is still listable.
+		qp.Finalizers = []string{aiGatewayControllerFinalizer}
+		require.NoError(t, fakeClient.Create(t.Context(), qp))
+
+		// While live, the policy contributes to a non-empty hash.
+		live, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.NotEmpty(t, live)
+
+		// Mark the policy for deletion; it remains listable because of the finalizer.
+		require.NoError(t, fakeClient.Delete(t.Context(), qp))
+		var terminating aigv1a1.QuotaPolicy
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(qp), &terminating))
+		require.False(t, terminating.DeletionTimestamp.IsZero(), "policy should be terminating, not removed")
+
+		// A terminating policy must be treated as already-absent, yielding an empty hash.
+		got, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.Empty(t, got, "a terminating QuotaPolicy must be excluded from the hash")
+	})
+
 	t.Run("hash is independent of policy discovery order", func(t *testing.T) {
 		fakeClient := requireNewFakeClientWithIndexes(t)
 		c := newController(fakeClient)

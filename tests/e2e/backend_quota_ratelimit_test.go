@@ -123,6 +123,31 @@ func Test_Examples_BackendQuotaRateLimit(t *testing.T) {
 		}, 30*time.Second, 500*time.Millisecond,
 			"quota-policy-hash annotation did not change after updating the QuotaPolicy")
 	})
+
+	// Deleting the QuotaPolicy must re-stamp the generated HTTPRoute so the quota-policy-hash annotation
+	// is removed, proving the controller notified the AIGatewayRoute on delete (via the finalizer) and
+	// Envoy Gateway re-translated without the deleted policy. This runs last because it removes the only
+	// QuotaPolicy targeting the backend.
+	t.Run("quota policy delete is applied live", func(t *testing.T) {
+		const routeName, routeNamespace = "quota-test-model", "default"
+
+		// Precondition: the annotation is present because a QuotaPolicy currently targets this route's backend.
+		require.Eventually(t, func() bool {
+			return getHTTPRouteQuotaHash(t, routeNamespace, routeName) != ""
+		}, 30*time.Second, 500*time.Millisecond, "expected quota-policy-hash annotation to be set before delete")
+
+		// Delete the QuotaPolicy live (no controller/Envoy restart).
+		require.NoError(t, e2elib.Kubectl(t.Context(), "delete", "quotapolicy",
+			"envoy-ai-gateway-quota-ratelimit-policy", "-n", routeNamespace,
+		).Run())
+
+		// With no QuotaPolicy targeting the backend, the controller must remove the annotation, proving the
+		// HTTPRoute was re-stamped (and thus Envoy Gateway re-translated) in response to the delete.
+		require.Eventually(t, func() bool {
+			return getHTTPRouteQuotaHash(t, routeNamespace, routeName) == ""
+		}, 30*time.Second, 500*time.Millisecond,
+			"quota-policy-hash annotation was not removed after deleting the QuotaPolicy")
+	})
 }
 
 // getHTTPRouteQuotaHash returns the value of the "aigateway.envoyproxy.io/quota-policy-hash"
