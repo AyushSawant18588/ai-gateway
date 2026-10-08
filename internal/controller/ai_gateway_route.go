@@ -524,7 +524,7 @@ func (c *AIGatewayRouteController) computeQuotaPolicyHash(ctx context.Context, a
 			// The QuotaPolicy targetRefs index key is "<targetRef.Name>.<quotaPolicy.Namespace>", and a
 			// QuotaPolicy (LocalPolicyTargetReference) can only target a backend in its own namespace, so
 			// the backend's namespace is also the QuotaPolicy's namespace.
-			key := fmt.Sprintf("%s.%s", br.Name, backendNamespace)
+			key := namespacedNameIndexKey(br.Name, backendNamespace)
 			var policies aigv1a1.QuotaPolicyList
 			if err := c.client.List(ctx, &policies,
 				client.MatchingFields{k8sClientIndexAIServiceBackendToTargetingQuotaPolicy: key}); err != nil {

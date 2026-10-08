@@ -200,7 +200,7 @@ func (c *QuotaPolicyController) getMergedConfigsLocked() []*rlsconfv3.RateLimitC
 // when an AIServiceBackend changes, all QuotaPolicies targeting it are re-reconciled.
 func (c *QuotaPolicyController) BackendToQuotaPolicy(ctx context.Context, obj client.Object) []reconcile.Request {
 	var quotaPolicies aigv1a1.QuotaPolicyList
-	key := fmt.Sprintf("%s.%s", obj.GetName(), obj.GetNamespace())
+	key := namespacedNameIndexKey(obj.GetName(), obj.GetNamespace())
 	if err := c.client.List(ctx, &quotaPolicies,
 		client.MatchingFields{k8sClientIndexAIServiceBackendToTargetingQuotaPolicy: key}); err != nil {
 		c.logger.Error(err, "failed to list QuotaPolicies for backend", "backend", key)
@@ -223,7 +223,7 @@ func (c *QuotaPolicyController) BackendToQuotaPolicy(ctx context.Context, obj cl
 // to re-translate xDS and call PostTranslateModify with the updated QuotaPolicy.
 func (c *QuotaPolicyController) notifyAIGatewayRoutes(ctx context.Context, policy *aigv1a1.QuotaPolicy) {
 	for _, ref := range policy.Spec.TargetRefs {
-		key := fmt.Sprintf("%s.%s", ref.Name, policy.Namespace)
+		key := namespacedNameIndexKey(string(ref.Name), policy.Namespace)
 		var aiGatewayRoutes aigv1b1.AIGatewayRouteList
 		if err := c.client.List(ctx, &aiGatewayRoutes,
 			client.MatchingFields{k8sClientIndexBackendToReferencingAIGatewayRoute: key}); err != nil {
@@ -250,7 +250,7 @@ func (c *QuotaPolicyController) notifyAIGatewayRoutesForNamespace(ctx context.Co
 	}
 	notified := make(map[client.ObjectKey]struct{})
 	for i := range backends.Items {
-		key := fmt.Sprintf("%s.%s", backends.Items[i].Name, namespace)
+		key := namespacedNameIndexKey(backends.Items[i].Name, namespace)
 		var aiGatewayRoutes aigv1b1.AIGatewayRouteList
 		if err := c.client.List(ctx, &aiGatewayRoutes,
 			client.MatchingFields{k8sClientIndexBackendToReferencingAIGatewayRoute: key}); err != nil {
