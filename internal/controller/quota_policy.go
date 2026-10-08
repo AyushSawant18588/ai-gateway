@@ -92,6 +92,10 @@ func (c *QuotaPolicyController) Reconcile(ctx context.Context, req reconcile.Req
 		return ctrl.Result{}, err
 	}
 	c.updateQuotaPolicyStatus(ctx, &quotaPolicy, aigv1a1.ConditionTypeAccepted, "QuotaPolicy reconciled successfully")
+	// Notifies routes referencing the policy's current TargetRefs. If a spec.targetRefs edit drops a
+	// backend, routes referencing the removed backend are not notified here, so their quota-policy-hash
+	// annotation is left stale. This self-heals when such a route shares a gateway with a notified route
+	// (that gateway re-translates and the extension server recomputes descriptors from live policies).
 	c.notifyAIGatewayRoutes(ctx, &quotaPolicy)
 	return ctrl.Result{}, nil
 }
