@@ -54,7 +54,7 @@ const (
 	// HTTPRoute genuinely change on a QuotaPolicy update, which triggers Envoy Gateway to re-translate
 	// and re-run the extension server's PostTranslateModify hook (which injects the quota rate limit
 	// filter, cluster, and per-route descriptors). Mirrors stampGatewayConfigHash in gateway.go.
-	httpRouteQuotaPolicyHashAnnotationKey = "aigateway.envoyproxy.io/quota-policy-hash"
+	httpRouteQuotaPolicyHashAnnotationKey = egAnnotationPrefix + "quota-policy-hash"
 	egOwningGatewayNameLabel              = egAnnotationPrefix + "owning-gateway-name"
 	egOwningGatewayNamespaceLabel         = egAnnotationPrefix + "owning-gateway-namespace"
 	// apiKeyInSecret is the key to store OpenAI API key.

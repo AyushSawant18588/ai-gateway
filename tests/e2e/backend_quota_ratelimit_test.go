@@ -95,7 +95,7 @@ func Test_Examples_BackendQuotaRateLimit(t *testing.T) {
 	})
 
 	// The AI Gateway controller stamps a hash of the applicable QuotaPolicies onto the generated HTTPRoute
-	// (the "aigateway.envoyproxy.io/quota-policy-hash" annotation). A QuotaPolicy change must re-stamp a
+	// (the "gateway.envoyproxy.io/quota-policy-hash" annotation). A QuotaPolicy change must re-stamp a
 	// different hash, which is what forces Envoy Gateway to re-translate and re-run the extension
 	// server's PostTranslateModify hook. The generated HTTPRoute shares the AIGatewayRoute's
 	// name/namespace ("quota-test-model"/"default").
@@ -150,14 +150,14 @@ func Test_Examples_BackendQuotaRateLimit(t *testing.T) {
 	})
 }
 
-// getHTTPRouteQuotaHash returns the value of the "aigateway.envoyproxy.io/quota-policy-hash"
+// getHTTPRouteQuotaHash returns the value of the "gateway.envoyproxy.io/quota-policy-hash"
 // annotation stamped by the AI Gateway controller on the generated HTTPRoute. It returns "" when the
 // annotation is absent.
 func getHTTPRouteQuotaHash(t *testing.T, namespace, name string) string {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "kubectl", "get", "httproute", name,
 		"-n", namespace,
-		"-o", `jsonpath={.metadata.annotations.aigateway\.envoyproxy\.io/quota-policy-hash}`)
+		"-o", `jsonpath={.metadata.annotations.gateway\.envoyproxy\.io/quota-policy-hash}`)
 	out, err := cmd.Output()
 	require.NoError(t, err, "failed to get httproute %s/%s", namespace, name)
 	return strings.TrimSpace(string(out))
